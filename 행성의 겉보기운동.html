@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>행성 겉보기 운동 (모바일 최적화)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { background-color: #020617; color: white; font-family: 'Pretendard', sans-serif; margin: 0; padding: 0; overflow: hidden; touch-action: none; }
+        canvas { display: block; }
+        .ui-overlay { position: absolute; bottom: 0; left: 0; width: 100%; padding: 20px 16px; background: linear-gradient(to top, rgba(2,6,23,1) 40%, rgba(2,6,23,0) 100%); z-index: 10; }
+        .control-card { background: rgba(15, 23, 42, 0.85); backdrop-filter: blur(12px); border: 1px solid rgba(255,255,255,0.1); border-radius: 20px; padding: 16px; width: 100%; max-width: 500px; margin: 0 auto; box-shadow: 0 10px 25px rgba(0,0,0,0.5); }
+        
+        .nav-btn { background: #1e293b; color: #f8fafc; font-weight: bold; font-size: 0.95rem; padding: 12px 20px; border-radius: 12px; transition: all 0.2s; border: 1px solid rgba(255,255,255,0.05); flex: 1; text-align: center; }
+        .nav-btn:active { transform: scale(0.95); background: #3b82f6; border-color: #60a5fa; }
+        .nav-btn:disabled { opacity: 0.3; pointer-events: none; }
+        
+        .mode-btn { padding: 8px 16px; border-radius: 8px; font-size: 0.85rem; font-weight: 600; transition: all 0.2s; flex: 1; text-align: center; }
+        .mode-btn.active { background: #3b82f6; color: white; box-shadow: 0 0 10px rgba(59, 130, 246, 0.4); }
+        .mode-btn.inactive { color: #64748b; }
+        
+        .status-badge { padding: 4px 12px; border-radius: 20px; font-size: 0.75rem; font-weight: bold; min-width: 90px; text-align: center; }
+    </style>
+</head>
+<body class="flex flex-col items-center">
+
+    <canvas id="simCanvas"></canvas>
+
+    <div class="ui-overlay">
+        <div class="control-card flex flex-col gap-4">
+            <div class="flex justify-between items-center px-1">
+                <div class="flex bg-slate-800 p-1 rounded-xl gap-1 w-2/3">
+                    <button id="innerMode" class="mode-btn active">내행성</button>
+                    <button id="outerMode" class="mode-btn inactive">외행성</button>
+                </div>
+                <div id="statusLabel" class="status-badge bg-green-500 text-white shadow-lg">순행</div>
+            </div>
+
+            <div class="flex justify-between items-center bg-slate-800/60 rounded-xl p-2 px-3 border border-slate-700/50">
+                <button id="prevBtn" class="nav-btn">&lt; 이전</button>
+                
+                <div class="font-bold text-white tracking-widest text-sm px-6 text-center whitespace-nowrap">
+                    <span id="stepDisplay" class="text-blue-400 text-2xl font-black">1</span> / 9
+                </div>
+                
+                <button id="nextBtn" class="nav-btn">다음 &gt;</button>
+            </div>
+
+            <div class="text-center text-[12px] text-slate-400 leading-tight">
+                한 화면에 S자 루프가 들어오도록 최적화되었습니다.<br>이전/다음 버튼으로 위치 변화를 확인하세요.
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('simCanvas');
+        const ctx = canvas.getContext('2d');
+
+        let width, height;
+        let mode = 'inner';
+        let currentStep = 1;
+        let lerpTime = 1;
+        let lastTime = 0;
+        let targetTime = 0;
+        
+        let SUN_Y, EARTH_ORBIT, PLANET_ORBIT, SKY_Y;
+        let scaleFactor = 1;
+
+        // 9단계 각도 데이터 
+        const steps = {
+            inner: {
+                earth: [2.7, 2.4, 2.1, 1.8, 1.5, 1.2, 0.9, 0.6, 0.3],
+                planet: [4.4, 3.65, 2.9, 2.15, 1.4, 0.65, -0.1, -0.85, -1.6]
+            },
+            outer: {
+                earth: [3.8, 3.2, 2.6, 2.0, 1.4, 0.8, 0.2, -0.4, -1.0],
+                mars: [2.3, 2.1, 1.9, 1.7, 1.5, 1.3, 1.1, 0.9, 0.7]
+            }
+        };
+
+        function resize() {
+            width = window.innerWidth;
+            height = window.innerHeight;
+            canvas.width = width;
+            canvas.height = height;
+            
+            // 모바일 최적화 비율 계산
+            scaleFactor = Math.min(width, height) / 400;
+            
+            // 천구(궤적) 위치와 태양 위치 설정 (하단 UI 여백 확보)
+            SKY_Y = height * 0.15;
+            SUN_Y = height * 0.48; 
+            
+            // 궤도 크기를 모바일 화면에 맞게 자동 조절
+            EARTH_ORBIT = Math.min(width, height) * 0.28;
+            
+            updateMode();
+            drawBackground();
+        }
+
+        function updateMode() {
+            if (mode === 'inner') {
+                PLANET_ORBIT = EARTH_ORBIT * 0.55;
+            } else {
+                PLANET_ORBIT = EARTH_ORBIT * 1.45;
+            }
+            setStep(1);
+        }
+
+        function setStep(s) {
+            lastTime = currentStep - 1;
+            currentStep = s;
+            targetTime = currentStep - 1;
+            lerpTime = 0;
+            
+            // UI 업데이트
+            document.getElementById('stepDisplay').innerText = currentStep;
+            document.getElementById('prevBtn').disabled = currentStep === 1;
+            document.getElementById('nextBtn').disabled = currentStep === 9;
+        }
+
+        function drawBackground() {
+            const grad = ctx.createLinearGradient(0, 0, 0, height);
+            grad.addColorStop(0, '#020617');
+            grad.addColorStop(0.5, '#0f172a');
+            grad.addColorStop(1, '#020617');
+            ctx.fillStyle = grad;
+            ctx.fillRect(0, 0, width, height);
+
+            ctx.fillStyle = "rgba(255, 255, 255, 0.5)";
+            ctx.font = "bold 13px sans-serif";
+            ctx.fillText("동(East) ←", 20, SKY_Y - 30 * scaleFactor);
+            ctx.fillText("→ 서(West)", width - 85, SKY_Y - 30 * scaleFactor);
+        }
+
+        function getInterpolatedPos(stepIndex, fraction) {
+            const data = mode === 'inner' ? steps.inner : steps.outer;
+            const planetData = mode === 'inner' ? steps.inner.planet : steps.outer.mars;
+            
+            const i = Math.min(Math.floor(stepIndex), 8);
+            const nextI = Math.min(i + 1, 8);
+            const f = fraction;
+
+            const eAngle = data.earth[i] + (data.earth[nextI] - data.earth[i]) * f;
+            const pAngle = planetData[i] + (planetData[nextI] - planetData[i]) * f;
+
+            const ex = width/2 + Math.cos(eAngle) * EARTH_ORBIT;
+            const ey = SUN_Y + Math.sin(eAngle) * EARTH_ORBIT;
+            const px = width/2 + Math.cos(pAngle) * PLANET_ORBIT;
+            const py = SUN_Y + Math.sin(pAngle) * PLANET_ORBIT;
+
+            const dx = px - ex;
+            const dy = py - ey;
+            const m = dy / dx;
+            const skyX = ex + (SKY_Y - ey) / m;
+            
+            const progress = i + f;
+            
+            // 모바일 화면 비율에 맞춰 S자 곡선의 굴곡 깊이를 동적 계산
+            const loopDir = mode === 'inner' ? 1 : -1;
+            const slant = (progress - 4) * 6 * scaleFactor; 
+            const loopCurve = Math.sin((progress - 4) * 1.05) * 25 * loopDir * scaleFactor;
+            const skyY = SKY_Y + slant - loopCurve;
+
+            return { ex, ey, px, py, skyX, skyY };
+        }
+
+        function animate() {
+            if (lerpTime < 1) {
+                lerpTime += 0.03; // 화면 전환 속도 최적화
+                if (lerpTime > 1) lerpTime = 1;
+            }
+
+            drawBackground();
+
+            // 궤도 라인
+            ctx.setLineDash([4, 8]);
+            ctx.strokeStyle = "rgba(255,255,255,0.12)";
+            ctx.beginPath(); ctx.arc(width/2, SUN_Y, EARTH_ORBIT, 0.0, Math.PI * 2); ctx.stroke();
+            ctx.beginPath(); ctx.arc(width/2, SUN_Y, PLANET_ORBIT, 0.0, Math.PI * 2); ctx.stroke();
+            ctx.setLineDash([]);
+            
+            // 태양
+            ctx.shadowBlur = 15; ctx.shadowColor = "orange";
+            ctx.fillStyle = "#fbbf24";
+            ctx.beginPath(); ctx.arc(width/2, SUN_Y, 12 * scaleFactor, 0, Math.PI * 2); ctx.fill();
+            ctx.shadowBlur = 0;
+
+            // 궤적 미리 그리기 (투명하게)
+            const fullPath = [];
+            for (let i = 0; i <= 8; i += 0.02) {
+                fullPath.push(getInterpolatedPos(Math.floor(i), i % 1));
+            }
+            ctx.strokeStyle = "rgba(255, 255, 255, 0.15)";
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.moveTo(fullPath[0].skyX, fullPath[0].skyY);
+            for(let p of fullPath) ctx.lineTo(p.skyX, p.skyY);
+            ctx.stroke();
+
+            // 진행 궤적 그리기
+            const currentIdx = lastTime + (targetTime - lastTime) * lerpTime;
+            const pos = getInterpolatedPos(Math.floor(currentIdx), currentIdx % 1);
+
+            ctx.lineWidth = 4;
+            ctx.strokeStyle = "#fb923c";
+            ctx.lineCap = "round";
+            ctx.lineJoin = "round";
+            ctx.beginPath();
+            ctx.moveTo(fullPath[0].skyX, fullPath[0].skyY);
+            for(let i=0; i < fullPath.length; i++) {
+                if (i * 0.02 > currentIdx) break;
+                ctx.lineTo(fullPath[i].skyX, fullPath[i].skyY);
+            }
+            ctx.stroke();
+
+            // 시선 연장선
+            ctx.strokeStyle = "rgba(255, 255, 255, 0.3)";
+            ctx.lineWidth = 1;
+            ctx.setLineDash([3, 5]);
+            ctx.beginPath(); ctx.moveTo(pos.ex, pos.ey); ctx.lineTo(pos.skyX, pos.skyY); ctx.stroke();
+            ctx.setLineDash([]);
+
+            // 지점 번호 그리기
+            for(let i=1; i<=9; i++) {
+                const p = getInterpolatedPos(i-1, 0);
+                const isActive = i === currentStep;
+                
+                ctx.fillStyle = isActive ? "#fb923c" : "rgba(255,255,255,0.4)";
+                ctx.beginPath(); ctx.arc(p.skyX, p.skyY, isActive ? 5 : 2.5, 0, Math.PI*2); ctx.fill();
+                ctx.font = "bold 11px sans-serif";
+                ctx.fillText(i, p.skyX - 4, p.skyY - 12);
+
+                ctx.fillStyle = "rgba(255,255,255,0.4)";
+                ctx.fillText(i, p.ex - 4, p.ey + 20);
+            }
+
+            // 실시간 지구와 행성
+            ctx.fillStyle = "#3b82f6";
+            ctx.beginPath(); ctx.arc(pos.ex, pos.ey, 8 * scaleFactor, 0, Math.PI * 2); ctx.fill();
+            ctx.fillStyle = "white"; ctx.font = "bold 10px sans-serif"; ctx.fillText("지구", pos.ex - 10, pos.ey + 25);
+            
+            ctx.fillStyle = "#f97316";
+            ctx.beginPath(); ctx.arc(pos.px, pos.py, 7 * scaleFactor, 0, Math.PI * 2); ctx.fill();
+            ctx.fillStyle = "white"; ctx.fillText(mode === 'inner' ? "금성" : "화성", pos.px - 10, pos.py + 25);
+
+            updateStatus(currentIdx + 1);
+
+            requestAnimationFrame(animate);
+        }
+
+        function updateStatus(step) {
+            const statusEl = document.getElementById('statusLabel');
+            const stationaryTolerance = 0.15;
+            
+            if (Math.abs(step - 3) < stationaryTolerance || Math.abs(step - 7) < stationaryTolerance) {
+                statusEl.innerText = "유 (留)";
+                statusEl.className = "status-badge bg-yellow-500 text-black";
+            } else if (step > 3 && step < 7) {
+                statusEl.innerText = "역행 (Retrograde)";
+                statusEl.className = "status-badge bg-red-500 text-white";
+            } else {
+                statusEl.innerText = "순행 (Prograde)";
+                statusEl.className = "status-badge bg-green-500 text-white";
+            }
+        }
+
+        // 버튼 이벤트 등록
+        document.getElementById('prevBtn').addEventListener('click', () => {
+            if (currentStep > 1) setStep(currentStep - 1);
+        });
+
+        document.getElementById('nextBtn').addEventListener('click', () => {
+            if (currentStep < 9) setStep(currentStep + 1);
+        });
+
+        document.getElementById('innerMode').onclick = (e) => {
+            mode = 'inner';
+            e.target.classList.replace('inactive', 'active');
+            document.getElementById('outerMode').classList.replace('active', 'inactive');
+            updateMode();
+        };
+
+        document.getElementById('outerMode').onclick = (e) => {
+            mode = 'outer';
+            e.target.classList.replace('inactive', 'active');
+            document.getElementById('innerMode').classList.replace('active', 'inactive');
+            updateMode();
+        };
+
+        window.addEventListener('resize', resize);
+        resize();
+        animate();
+    </script>
+</body>
+</html>
